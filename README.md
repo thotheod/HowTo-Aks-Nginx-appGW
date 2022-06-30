@@ -110,20 +110,88 @@ service.beta.kubernetes.io/azure-load-balancer-internal-subnet: "snet-aksAppServ
 ```
 If we now deploy that yaml file ( ```kubectl apply -f ./workloads/echoserver.yaml ``` )  we can see that the Service takes an Internal IP from the Address Space of the subnet ```snet-aksAppServices```. We can pin that IP without the risk of getting conflicts with other services or nodes that dynamically get an IP from the ```snet-aksNodes``` subnet.
 
-![Servcies with Internal IPs from different Subnets](resources/ServicesInternalIPs.png)
+![Services with Internal IPs from different Subnets](resources/ServicesInternalIPs.png)
 
 ## Create nginx controller
+To create an ingress controller in AKS you can follow this [documentation](https://docs.microsoft.com/en-us/azure/aks/ingress-basic?tabs=azure-cli). The simplest way by running the following CLI commands
+
+``` sh
+NAMESPACE=ingress-basic
+
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --create-namespace \
+  --namespace $NAMESPACE \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz
+```
+The above commands will create an nginx controller in namespace ```ingress-basic``` with a Public IP. Our aim in this PoC is to have all services internal.
+
 
 #### Make nginx controller internal
+ To do that for ingress controller we need to create a yaml file with the following content (i.e. [internal-ingress.yaml](workloads/internal-ingress.yaml)): 
+```yaml
+controller:
+  service:
+    loadBalancerIP: 10.4.10.100
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+      service.beta.kubernetes.io/azure-load-balancer-internal-subnet: "snet-aksAppServices"
+```
+Then update the ingress controller with the command: 
+``` sh
+helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
+  --create-namespace \
+  --namespace $NAMESPACE \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz \
+  -f ./workloads/internal-ingress.yaml
+```
+
+This will now create an internal IP (10.4.10.100) in the seperate "services" subnet, as shown below
+![internal nginx](resources/03-nginxInternal.png)
 
 #### Deploy HelloWorld samples with Ingress Routes (on specific namespace)
+>**Reminder**: For Ingress to be fully functional we need two seperate things. The first is the __Ingress Controller__ which usually is deployed in a seperate namespace (i.e. _ingress-basic_). The second resource we need is the __Ingress Rules__ (_kind: Ingress_) which should be deployed in the namespace of the apps they support. 
 
+Any application that we plan to deploy behind an ingress controller needs a __service__ of type ```ClusterIP``` This means that the IP the Service will get is not taken from the AKS virtual network but from the internal ```serviceCidr``` ([Bicep temaplate](https://docs.microsoft.com/en-us/azure/templates/microsoft.containerservice/managedclusters?tabs=bicep) or [sample AKS with kubenet Repo](https://github.com/thotheod/Bicep-AksKubenetPrivate/blob/main/DeployAKSKubenet/Modules/aks-kubenet.module.bicep)) 
+
+We deploy the two apps ([helloWorldIngress1.yaml](workloads/helloWorldIngress1.yaml), [helloWorldIngress2.yaml](workloads/helloWorldIngress2.yaml)) and the ingress routes ([ingressRoutes.yaml](workloads/ingressRoutes.yaml)) with the following commands in the  _helloapp_ namespace.
+``` sh
+kubectl apply -f ./workloads/helloWorldIngress1.yaml -n helloapp
+kubectl apply -f ./workloads/helloWorldIngress2.yaml -n helloapp
+kubectl apply -f ./workloads/ingressRoutes.yaml -n helloapp
+```
+
+#### Test that ingress is working correctly
+Since nginx is exposed in an internal IP, to test if the routes work as expected, we need to check either from a VM that has access to that internal network, or we can start a test pod as decribed below: 
+```sh
+kubectl run -it --rm aks-ssh --image=debian
+apt-get update -y && apt-get install dnsutils -y && apt-get install curl -y
+# After the packages are installed, test the connectivity to the ingress service:
+curl -Iv http://10.4.10.100//hello-world-one 
+curl -Iv http://10.4.10.100//hello-world-two
+```
 
 
 # Expose through AppGW
+We have 4 apps, exposed through two ```LoadBalancer``` Services and one ```nginx``` service. These three services (as depicted below) are going to be our AppGW BackendPools.
+![Internal Services to be exposed](resources/04-backendServices.png)
 
 ## Configure Backend pools
+We need to create three backend pools (i.e. named echoserver, aspnetApp, nginx) each one pointing to the respective internal IP, below is an example of the backend _echoserver_
+![BackendPool example](resources/05-BackendPool.png)
 
 ## Configure Listeners
+We need to create three different [multi-site listeners](https://docs.microsoft.com/en-us/azure/application-gateway/create-multiple-sites-portal). We cannot have multiple listeners in the same port, unless they are of type _Multi Site_ where we need to define the host name of the site they are serving (ie aspnetapp.theolabs.gr, echoserver.theolabs.gr, nginx.theolabs.gr)
+Below is depicted an example of aspnetappListener
+![Listeners example](resources/6-listeners.png)
 
 ## Bind them all together - Configure Rules
+Then we just need to create three rules (one for every app) that will bind each Listener with the respective Backend pool. 
+
+If we used valid FQDNs (or test locally with entries into hosts file) then all the four apps can be accessed through the one Public IP of the AppGW:
+- http://aspnetapp.theolabs.gr/
+- http://echoserver.theolabs.gr/
+- http://nginx.theolabs.gr/hello-world-one
+- http://nginx.theolabs.gr/hello-world-two
