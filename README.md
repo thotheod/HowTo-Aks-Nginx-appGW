@@ -111,3 +111,19 @@ service.beta.kubernetes.io/azure-load-balancer-internal-subnet: "snet-aksAppServ
 If we now deploy that yaml file ( ```kubectl apply -f ./workloads/echoserver.yaml ``` )  we can see that the Service takes an Internal IP from the Address Space of the subnet ```snet-aksAppServices```. We can pin that IP without the risk of getting conflicts with other services or nodes that dynamically get an IP from the ```snet-aksNodes``` subnet.
 
 ![Servcies with Internal IPs from different Subnets](resources/ServicesInternalIPs.png)
+
+## Create nginx controller
+
+#### Make nginx controller internal
+
+#### Deploy HelloWorld samples with Ingress Routes (on specific namespace)
+
+
+
+# Expose through AppGW
+
+## Configure Backend pools
+
+## Configure Listeners
+
+## Bind them all together - Configure Rules
