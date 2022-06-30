@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: echoserver
+  name: echoserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: echoserver
+  template:
+    metadata:
+      labels:
+        app: echoserver
+    spec:
+      containers:
+      - image: k8s.gcr.io/echoserver:1.4
+        imagePullPolicy: IfNotPresent
+        name: echoserver
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: echoserver
+  name: echoserver  
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"  
+    service.beta.kubernetes.io/azure-load-balancer-internal-subnet: "snet-aksAppServices"
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: echoserver
+  sessionAffinity: None
+  type: LoadBalancer
+  loadBalancerIP: 10.4.10.10
